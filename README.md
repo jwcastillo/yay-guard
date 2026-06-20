@@ -8,24 +8,55 @@ It automates what Arch recommends doing by hand: reviewing the PKGBUILD, install
 scripts, history, maintainer, and popularity — and, optionally, asking an AI for a
 verdict.
 
-## How it works
+## What it decides
 
-`aur_audit.py` is the engine. It combines **three signals** and keeps the worst one:
+It produces a single verdict — `info`/`low`/`medium`/`high`/`critical` — used to decide
+**whether a package should be installed**. Each finding carries a severity; the package's
+verdict is the **worst** finding. The `--fail-on` threshold (default `high`) turns that
+verdict into an action:
 
-1. **Static heuristics** — regex over `PKGBUILD`/`.install`/`.SRCINFO`
-   (`curl|sh`, `base64 -d`, `/dev/tcp`, `nc -e`, persistence, editing `~/.bashrc`,
-   URLs to pastes/shorteners/IPs, obfuscated hex…), each with its own severity.
-2. **AUR RPC metadata** — orphan status, popularity, creation/modification dates,
-   out-of-date flag, or the package no longer existing.
-3. **AI verdict** (optional) — a model reviews the package. **The AI verdict overrides
-   the heuristics**: it can clear a false positive (e.g. `google-chrome`) without
-   disabling the entire audit.
+- **yay v13 hook** — on `yay -S`, a blocking verdict aborts the build (with `AUR_AUDIT_OFF=1`
+  to force); on `yay -Syu`, blocking packages are **excluded** and the upgrade continues.
+- **`yay-guard` wrapper** — a blocking verdict requires typing an explicit confirmation
+  before it hands off to `yay`.
+- **exit code** — `2` when any package meets the threshold, so it composes in scripts.
 
-Severity: `info < low < medium < high < critical`. By default it blocks at `high`.
+So the answer to "install or not" is: install if the verdict is below `--fail-on`;
+otherwise stop and review (or explicitly override).
 
-The **affected-packages list** auto-refreshes from the official Arch note
-(`https://md.archlinux.org/s/SxbqukK6IA`); being on it means *review with attention*,
-not that your installed copy is compromised.
+## What it's based on (beyond the AI)
+
+The AI verdict is **optional**. The core decision works with no token and no network,
+on two deterministic signals:
+
+**1. Static heuristics** — regex over the real `PKGBUILD` / `.install` / `.SRCINFO`
+(the locally built copy in `~/.cache/yay|paru` is preferred over upstream, since that's
+what actually ran). It flags, with a severity each:
+
+- `curl|sh` / `wget|sh`, raw `curl`/`wget` downloads, downloads from a literal **IP**,
+  **URL shorteners**, or **ephemeral paste** services (not a real upstream)
+- `base64 -d`, `eval`, long `\xNN` **hex blobs**, `xxd -r`, inline `gpg`/`openssl`
+  decryption, inline `python -c` — obfuscation / hidden payloads
+- `nc -e`, `/dev/tcp/` — reverse shells
+- `cron` / `systemctl enable` / `autostart` / systemd units, edits to
+  `~/.bashrc`/`.zshrc`/`.profile`, `chattr` — **persistence**
+- `sudo` inside the PKGBUILD (build steps shouldn't escalate)
+
+**2. AUR RPC metadata** — orphan (no maintainer), very low popularity/votes,
+out-of-date, **submitted and modified within 7 days** (the adoption pattern of the
+campaign), or the package **no longer existing** in AUR.
+
+**3. Affected-packages denylist** — auto-refreshed from the official Arch note
+(`https://md.archlinux.org/s/SxbqukK6IA`, cache TTL `AUR_AUDIT_LIST_TTL`). Being on it
+means *review with attention* (severity `high`), **not** that your copy is compromised.
+
+**4. AI verdict (optional)** — a model reviews the package and **overrides the
+heuristics**: it can clear a false positive (e.g. `google-chrome`, whose legitimate
+`curl` + `cron`-removal lines trip the regexes) without disabling the audit. It never
+makes a clean package look worse than the deterministic signals already flagged.
+
+For the deepest check, `aur-deep-audit` runs Claude Code as a **read-only agent** that
+walks the package's `git log`/`git diff` to find the exact malicious adoption commit.
 
 ## Components
 
