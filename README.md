@@ -133,6 +133,11 @@ export ANTHROPIC_API_KEY=sk-ant-...
 > Note: when using `claude-code`, an exported `ANTHROPIC_API_KEY` is stripped from the
 > child process so it uses your subscription instead of a (possibly empty) API balance.
 
+> ⚠️ **Tested engine:** only `claude-code` has been verified end-to-end so far. The
+> `gemini`, `codex`, `cli`, `openai`, and `api` engines are wired up but **not yet
+> tested** — their default commands/endpoints may need adjusting (set
+> `AUR_AUDIT_CLI_CMD`, `AUR_AUDIT_API_URL`, or `--model` to match your provider).
+
 Without a token and without Claude Code, the audit still works using heuristics +
 metadata only.
 
