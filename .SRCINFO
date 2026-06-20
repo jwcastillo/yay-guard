@@ -13,6 +13,6 @@ pkgbase = yay-guard
 	optdepends = git: required by aur-deep-audit
 	optdepends = claude-code: AI verdict via your local Claude Code session
 	source = yay-guard-1.0.0.tar.gz::https://github.com/jwcastillo/yay-guard/archive/refs/tags/v1.0.0.tar.gz
-	sha256sums = SKIP
+	sha256sums = dc990b9d89b7d456c86df2c624e12ed6cda6f89ee0ab561297f37c065cf44b44
 
 pkgname = yay-guard
