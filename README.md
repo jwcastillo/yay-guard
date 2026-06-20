@@ -114,6 +114,12 @@ Configured with `AUR_AUDIT_ENGINE`:
 # Your local Claude Code session (no token):
 export AUR_AUDIT_ENGINE=claude-code
 
+# Any other local AI CLI — gemini, codex, ollama, or your own:
+export AUR_AUDIT_ENGINE=gemini                       # default: gemini -p {prompt}
+export AUR_AUDIT_ENGINE=codex                        # default: codex exec {prompt}
+export AUR_AUDIT_ENGINE=cli
+export AUR_AUDIT_CLI_CMD='mytool --json {prompt}'    # {prompt} placeholder, else stdin
+
 # Any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, Ollama, llama.cpp…):
 export AUR_AUDIT_ENGINE=openai
 export AUR_AUDIT_API_KEY=...                 # token
@@ -148,8 +154,8 @@ Flags: `--ai always|suspicious|never` · `--no-ai` · `--model` · `--json` ·
 `--fail-on high|critical|none` · `--tokens` (report to stderr, token per package to stdout).
 
 Relevant environment variables: `AUR_AUDIT_ENGINE`, `ANTHROPIC_API_KEY`,
-`AUR_AUDIT_API_KEY`, `AUR_AUDIT_API_URL`, `AUR_AUDIT_MODEL`, `AUR_AUDIT_DENYLIST`,
-`AUR_AUDIT_LIST_TTL`, `AUR_AUDIT_CLAUDE_BIN`.
+`AUR_AUDIT_API_KEY`, `AUR_AUDIT_API_URL`, `AUR_AUDIT_MODEL`, `AUR_AUDIT_CLI_CMD`,
+`AUR_AUDIT_DENYLIST`, `AUR_AUDIT_LIST_TTL`, `AUR_AUDIT_CLAUDE_BIN`.
 
 ## One-off bypass
 

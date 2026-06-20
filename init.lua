@@ -30,15 +30,18 @@ local PY        = "python3"
 -- avoids false positives (e.g. google-chrome) without disabling the whole audit.
 local AI_MODE   = "suspicious"
 
--- AI engine (any one with a token, or your Claude Code session):
---   "claude-code" → uses your Claude Code session (no token).
---   "openai"      → any OpenAI-compatible endpoint (OpenAI, OpenRouter,
---                   Groq, Ollama, llama.cpp…); export AUR_AUDIT_API_KEY and, if
---                   needed, AUR_AUDIT_API_URL / AUR_AUDIT_MODEL in your shell.
---   "api"         → Anthropic API (requires ANTHROPIC_API_KEY).
---   nil           → inherits AUR_AUDIT_ENGINE from the environment.
--- The hook environment usually does NOT have a token, so "claude-code" lets the
--- AI actually run and possibly allow what the heuristics blocked.
+-- AI engine (any one with a token, a local CLI, or your Claude Code session):
+--   "claude-code"      → uses your Claude Code session (no token).
+--   "gemini" / "codex" → local gemini/codex CLI (AUR_AUDIT_CLI_CMD overrides default).
+--   "cli"              → any local AI CLI; set AUR_AUDIT_CLI_CMD='mytool {prompt}'.
+--   "openai"           → any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq,
+--                        Ollama…); export AUR_AUDIT_API_KEY and, if needed,
+--                        AUR_AUDIT_API_URL / AUR_AUDIT_MODEL in your shell.
+--   "api"              → Anthropic API (requires ANTHROPIC_API_KEY).
+--   nil                → inherits AUR_AUDIT_ENGINE from the environment.
+-- The hook environment usually has no token, so "claude-code" (or a local CLI) lets
+-- the AI actually run and possibly allow what the heuristics blocked. For cli/gemini/
+-- codex, also export AUR_AUDIT_CLI_CMD in your shell so the hook inherits it.
 local ENGINE    = "claude-code"
 
 -- Level that BLOCKS the installation: "high" (recommended) or "critical".

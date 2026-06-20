@@ -28,12 +28,15 @@ AI engines (AUR_AUDIT_ENGINE):
                        Groq, Together, Ollama, llama.cpp…) — uses AUR_AUDIT_API_KEY
                        and AUR_AUDIT_API_URL; set the model with --model / AUR_AUDIT_MODEL
   claude-code | cc     uses your local Claude Code session (claude -p), no token needed
+  cli | gemini | codex any local AI CLI — set AUR_AUDIT_CLI_CMD (gemini/codex have
+                       sensible defaults). Use {prompt} as placeholder, else stdin.
 
 Environment variables:
   AUR_AUDIT_ENGINE      AI engine (see above; default: api)
   ANTHROPIC_API_KEY     Anthropic token (api engine)
   AUR_AUDIT_API_KEY     token for the openai/compatible engine
   AUR_AUDIT_API_URL     openai/compatible endpoint (default: api.openai.com)
+  AUR_AUDIT_CLI_CMD     command for the cli engine, e.g. 'gemini -p {prompt}'
   AUR_AUDIT_MODEL       model (default: claude-sonnet-4-6; change it to match the engine)
   AUR_AUDIT_DENYLIST    path or URL to a list (one per line) of affected packages
 """
@@ -43,6 +46,7 @@ import concurrent.futures
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -441,6 +445,52 @@ def _verdict_via_claude_code(prompt, name):
         return None
 
 
+# Sensible default commands for known CLIs; AUR_AUDIT_CLI_CMD overrides any of them.
+_CLI_DEFAULTS = {
+    "gemini": "gemini -p {prompt}",
+    "codex": "codex exec {prompt}",
+}
+
+
+def _verdict_via_cli(prompt, name, engine):
+    """Generic CLI engine: shell out to ANY local AI command (gemini, codex, ollama…)
+    and read the JSON verdict from its stdout. Configure with AUR_AUDIT_CLI_CMD; use
+    {prompt} as the prompt placeholder, otherwise the prompt is piped via stdin.
+    Examples:
+        AUR_AUDIT_CLI_CMD='gemini -p {prompt}'
+        AUR_AUDIT_CLI_CMD='codex exec {prompt}'
+        AUR_AUDIT_CLI_CMD='ollama run llama3'        # (prompt via stdin)
+    """
+    template = os.environ.get("AUR_AUDIT_CLI_CMD") or _CLI_DEFAULTS.get(engine)
+    if not template:
+        sys.stderr.write(C.yel("[ai/cli] set AUR_AUDIT_CLI_CMD to your CLI command "
+                               "(use {prompt} as placeholder, or the prompt is piped via stdin).\n"))
+        return None
+    try:
+        argv = shlex.split(template)
+    except ValueError as e:
+        sys.stderr.write(C.yel(f"[ai/cli] bad AUR_AUDIT_CLI_CMD: {e}\n"))
+        return None
+    if "{prompt}" in template:
+        argv = [a.replace("{prompt}", prompt) for a in argv]
+        stdin_data = None
+    else:
+        stdin_data = prompt
+    try:
+        out = subprocess.run(argv, input=stdin_data, capture_output=True, text=True, timeout=180)
+        if out.returncode != 0:
+            sys.stderr.write(C.yel(f"[ai/cli] {name}: exit {out.returncode}: "
+                                   f"{(out.stderr or out.stdout).strip()[:200]}\n"))
+            return None
+        return _parse_verdict_json(out.stdout)
+    except FileNotFoundError:
+        sys.stderr.write(C.yel(f"[ai/cli] command not found: {argv[0] if argv else '?'}\n"))
+        return None
+    except Exception as e:
+        sys.stderr.write(C.yel(f"[ai/cli] {name}: {e}\n"))
+        return None
+
+
 def ai_verdict(name, meta, pkgbuild, aux_files, heuristics, model):
     engine = os.environ.get("AUR_AUDIT_ENGINE", "api").lower()
     meta_brief = {k: meta.get(k) for k in
@@ -465,6 +515,8 @@ Previous heuristic findings: {json.dumps([h['desc'] for h in heuristics], ensure
 """
     if engine in ("claude-code", "cc", "claude_code"):
         return _verdict_via_claude_code(prompt, name)
+    if engine in ("cli", "gemini", "codex", "custom"):
+        return _verdict_via_cli(prompt, name, engine)
     if engine in ("openai", "compatible", "generic"):
         return _verdict_via_openai(prompt, model, name)
     return _verdict_via_api(prompt, model, name)  # anthropic (default)
@@ -667,8 +719,9 @@ def main():
     ai_mode = "never" if getattr(args, "no_ai", False) else args.ai
     engine = os.environ.get("AUR_AUDIT_ENGINE", "api").lower()
     if ai_mode != "never":
-        if engine in ("claude-code", "cc", "claude_code"):
-            pass  # uses your Claude Code session, no token needed
+        if engine in ("claude-code", "cc", "claude_code",
+                      "cli", "gemini", "codex", "custom"):
+            pass  # local CLI manages its own auth, no token needed here
         elif engine in ("openai", "compatible", "generic"):
             if not os.environ.get("AUR_AUDIT_API_KEY"):
                 sys.stderr.write(C.yel("[ai] AUR_AUDIT_API_KEY not set — skipping the AI verdict. "
