@@ -2,7 +2,7 @@ pkgbase = yay-guard
 	pkgdesc = Security audit for AUR packages before install (heuristics + AUR metadata + optional AI verdict)
 	pkgver = 1.0.0
 	pkgrel = 1
-	url = https://github.com/YOURUSER/yay-guard
+	url = https://github.com/jwcastillo/yay-guard
 	install = yay-guard.install
 	arch = any
 	license = MIT
@@ -12,7 +12,7 @@ pkgbase = yay-guard
 	optdepends = jq: nicer formatted output for aur-deep-audit
 	optdepends = git: required by aur-deep-audit
 	optdepends = claude-code: AI verdict via your local Claude Code session
-	source = yay-guard-1.0.0.tar.gz::https://github.com/YOURUSER/yay-guard/archive/refs/tags/v1.0.0.tar.gz
+	source = yay-guard-1.0.0.tar.gz::https://github.com/jwcastillo/yay-guard/archive/refs/tags/v1.0.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = yay-guard

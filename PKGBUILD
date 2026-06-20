@@ -1,11 +1,10 @@
-# Maintainer: Your Name <you@example.com>
+# Maintainer: jwcastillo <jwcastillo@gmail.com>
 pkgname=yay-guard
 pkgver=1.0.0
 pkgrel=1
 pkgdesc="Security audit for AUR packages before install (heuristics + AUR metadata + optional AI verdict)"
 arch=('any')
-# Set this to your published repository:
-url="https://github.com/YOURUSER/yay-guard"
+url="https://github.com/jwcastillo/yay-guard"
 license=('MIT')
 depends=('python' 'pacman')
 optdepends=(
