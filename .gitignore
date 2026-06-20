@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+affected.txt
+
+# makepkg artifacts
+/pkg/
+/src/
+*.pkg.tar.*
+*.tar.gz
+.claude/
+CLAUDE.md

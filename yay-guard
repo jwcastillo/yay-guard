@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# yay-guard — interposes a security audit before yay installs from AUR.
+#
+# In the wake of the AUR malware campaign (Jun 2026), this wrapper:
+#   1. Detects install operations (-S / -Sy / -Syu with targets).
+#   2. Filters the targets that come from AUR (not present in official repos).
+#   3. Runs aur_audit.py to audit them (heuristics + metadata + AI verdict).
+#   4. If there is high/critical risk, REQUIRES explicit confirmation before continuing.
+#   5. If all is well (or the user confirms), runs the real yay.
+#
+# Installation:
+#   sudo install -m755 aur_audit.py /usr/local/bin/aur_audit.py   # or wherever you prefer
+#   sudo install -m755 yay-guard    /usr/local/bin/yay-guard
+#   export ANTHROPIC_API_KEY="sk-ant-..."        # in your ~/.bashrc / ~/.zshrc
+#   alias yay='yay-guard'                          # optional: have it replace yay
+#
+# One-off bypass:  YAY_GUARD_OFF=1 yay -S package
+# Config:
+#   AUR_AUDIT=path to aur_audit.py (default: next to this script or in PATH)
+#   AUR_AUDIT_MODEL, ANTHROPIC_API_KEY, AUR_AUDIT_DENYLIST  (read by aur_audit.py)
+
+set -uo pipefail
+
+YAY_BIN="$(command -v yay || true)"
+[[ -z "$YAY_BIN" ]] && { echo "yay-guard: can't find 'yay' in PATH." >&2; exit 127; }
+
+# Locate the auditor.
+AUDIT="${AUR_AUDIT:-}"
+if [[ -z "$AUDIT" ]]; then
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$here/aur_audit.py" ]]; then AUDIT="$here/aur_audit.py"
+    elif command -v aur_audit.py >/dev/null 2>&1; then AUDIT="$(command -v aur_audit.py)"
+    fi
+fi
+
+# No auditor or bypass enabled → pass straight through to the real yay.
+if [[ -z "$AUDIT" || "${YAY_GUARD_OFF:-0}" == "1" ]]; then
+    exec "$YAY_BIN" "$@"
+fi
+
+# Is this an install operation? yay with no flags or with -S* installs.
+is_install=0
+for a in "$@"; do
+    case "$a" in
+        -S|-Sy|-Syu|-Syyu|-Su|-Sa) is_install=1 ;;
+        -S*) [[ "$a" != -S*-* ]] && is_install=1 ;;
+    esac
+done
+# yay with no flags at all (just names) also installs.
+has_flag=0; for a in "$@"; do [[ "$a" == -* ]] && has_flag=1; done
+[[ $has_flag -eq 0 && $# -gt 0 ]] && is_install=1
+
+if [[ $is_install -eq 0 ]]; then
+    exec "$YAY_BIN" "$@"
+fi
+
+# Extract the targets (anything that doesn't start with '-').
+targets=()
+for a in "$@"; do [[ "$a" != -* ]] && targets+=("$a"); done
+
+# No targets (e.g. a full 'yay -Syu'): audit what's already installed from AUR.
+if [[ ${#targets[@]} -eq 0 ]]; then
+    echo -e "\033[1m[yay-guard]\033[0m -Syu with no targets: auditing already-installed AUR packages…"
+    python3 "$AUDIT" audit --ai suspicious --fail-on critical
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        read -rp $'\033[31;1m[yay-guard]\033[0m Some AUR packages are flagged as critical. Continue anyway? [type YES]: ' ans
+        [[ "$ans" != "YES" ]] && { echo "Aborted."; exit 1; }
+    fi
+    exec "$YAY_BIN" "$@"
+fi
+
+# Filter out targets that are NOT in official repos → AUR candidates.
+aur_targets=()
+for t in "${targets[@]}"; do
+    if pacman -Si "$t" >/dev/null 2>&1; then
+        echo -e "\033[2m[yay-guard] $t is in the official repos, no AUR audit required.\033[0m"
+    else
+        aur_targets+=("$t")
+    fi
+done
+
+if [[ ${#aur_targets[@]} -eq 0 ]]; then
+    exec "$YAY_BIN" "$@"
+fi
+
+echo -e "\033[1m[yay-guard]\033[0m Auditing before install: \033[1m${aur_targets[*]}\033[0m"
+python3 "$AUDIT" check "${aur_targets[@]}" --ai always --fail-on high
+rc=$?
+
+if [[ $rc -ne 0 ]]; then
+    echo
+    echo -e "\033[31;1m[yay-guard] WARNING:\033[0m one or more packages show signs of HIGH/CRITICAL risk."
+    echo -e "Review the PKGBUILD and the .install scripts before continuing (the AUR cleanup is still ongoing)."
+    read -rp $'To install anyway, type exactly \033[1mI ACCEPT THE RISK\033[0m: ' ans
+    if [[ "$ans" != "I ACCEPT THE RISK" ]]; then
+        echo "Installation aborted by yay-guard. Sensible call."
+        exit 1
+    fi
+    echo -e "\033[33m[yay-guard] Continuing at your own risk…\033[0m"
+else
+    echo -e "\033[32;1m[yay-guard]\033[0m No high-risk signals. Continuing with yay."
+fi
+
+exec "$YAY_BIN" "$@"

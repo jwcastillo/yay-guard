@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# aur-deep-audit — deep audit of an AUR package using Claude Code as an AGENT.
+#
+# Unlike aur_audit.py (heuristics + a one-shot verdict), here Claude Code
+# CLONES the package repo and investigates it with READ-ONLY tools: it reads PKGBUILD,
+# *.install and .SRCINFO, and —most importantly for this campaign— it walks the GIT HISTORY
+# (git log / git diff) to find the adoption/maintainer-change commit and see
+# exactly what was introduced. That's where these attacks leave the clearest trace.
+#
+# Security: tools are restricted via --allowedTools to read + read-only git.
+# It NEVER runs makepkg, never installs, and never sources the PKGBUILD. It clones into an isolated tmp dir.
+#
+# Requirements: claude (Claude Code) on the PATH, git, jq (optional, improves formatting).
+# Usage:
+#   ./aur-deep-audit <package> [<package>...]
+#   ./aur-deep-audit --cache <package>     # audits the local yay/paru clone (what's already installed)
+#
+# Config:
+#   AUR_AUDIT_CLAUDE_BIN  Claude Code binary (default: claude)
+
+set -uo pipefail
+
+CLAUDE="${AUR_AUDIT_CLAUDE_BIN:-claude}"
+command -v "$CLAUDE" >/dev/null 2>&1 || { echo "Can't find '$CLAUDE' (Claude Code) on the PATH." >&2; exit 127; }
+command -v git >/dev/null 2>&1 || { echo "git is missing." >&2; exit 127; }
+
+USE_CACHE=0
+[[ "${1:-}" == "--cache" ]] && { USE_CACHE=1; shift; }
+[[ $# -lt 1 ]] && { echo "Usage: $0 [--cache] <package> [...]" >&2; exit 2; }
+
+# Allowed tools: file reads + READ-ONLY git. Nothing else is approved, so Claude can't
+# build, install or touch the system even if a prompt-injected PKGBUILD told it to.
+# Note: no 'git -C' — that would allow `git -C <dir> <any-subcommand>` (config, fetch,
+# push…). Instead we run claude with its CWD inside the repo, so plain read-only git
+# subcommands suffice and the surface stays minimal.
+ALLOWED='Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git status:*),Bash(cat:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(file:*),Bash(wc:*)'
+
+PROMPT='You are a security auditor for AUR packages (Arch Linux). There was a recent malware
+campaign that abused adoptions of orphaned packages and malicious instructions in the
+PKGBUILD and in .install scripts (downloads piped to a shell, payloads obfuscated in base64/hex,
+reverse shells, persistence, sources that are not the real upstream).
+
+You are in the git repository directory of ONE package. Investigate WITHOUT building or installing
+anything (read only). Steps:
+1. Read PKGBUILD, any *.install and .SRCINFO.
+2. Walk the history: `git log --oneline -n 30` and review the recent commits; pay
+   special attention to maintainer/adoption changes and to diffs that touch source=(), the
+   build()/package()/prepare() functions or the .install scripts. Use `git show <hash>` and
+   `git diff` to see the exact change.
+3. Check that the source=() URLs match the legitimate upstream (url/URL field),
+   not pastes, shorteners, IPs or suspicious repos.
+4. Flag: curl|sh, wget|sh, base64 -d, eval, long \x.. hex, /dev/tcp, nc -e, cron/systemd/
+   autostart, edits to ~/.bashrc, or any network execution during build/install.
+
+Respond ONLY with a JSON object, no markdown or extra text, with this exact shape:
+{"package":"...","risk":"low|medium|high|critical","confidence":0.0-1.0,"summary":"...",
+"suspicious_commit":"<hash or null>","findings":["..."],"recommendation":"install|review|do_not_install"}'
+
+audit_pkg() {
+    local pkg="$1" dir rc env result
+    # Validate the package name: a valid AUR name only. Prevents path/URL/shell
+    # surprises from a crafted argument before we clone or interpolate it.
+    if ! [[ "$pkg" =~ ^[a-z0-9][a-z0-9@._+-]*$ ]]; then
+        echo -e "\033[31m[$pkg] invalid package name; skipping.\033[0m" >&2
+        return 1
+    fi
+    if [[ $USE_CACHE -eq 1 ]]; then
+        dir=""
+        for c in "$HOME/.cache/yay/$pkg" "$HOME/.cache/paru/clone/$pkg"; do
+            [[ -d "$c/.git" ]] && { dir="$c"; break; }
+        done
+        [[ -z "$dir" ]] && { echo -e "\033[33m[$pkg] no local git clone in cache; use the mode without --cache.\033[0m"; return 1; }
+        echo -e "\033[1m[$pkg]\033[0m auditing local clone: $dir"
+    else
+        dir="$(mktemp -d "/tmp/aur-deep.$pkg.XXXX")"
+        echo -e "\033[1m[$pkg]\033[0m cloning from AUR…"
+        if ! git clone --quiet "https://aur.archlinux.org/${pkg}.git" "$dir" 2>/dev/null; then
+            echo -e "\033[33m[$pkg] could not clone (removed during cleanup? different pkgbase?). A signal worth investigating.\033[0m"
+            rm -rf "$dir"; return 1
+        fi
+    fi
+
+    # Claude Code headless, restricted tools, with CWD inside the repo (so the
+    # read-only git commands work without the broad `git -C`). Unset ANTHROPIC_API_KEY
+    # so claude uses your subscription, not a (possibly empty) pay-as-you-go API key.
+    env="$(cd "$dir" && env -u ANTHROPIC_API_KEY "$CLAUDE" -p "$PROMPT" \
+            --output-format json \
+            --allowedTools "$ALLOWED" \
+            --add-dir "$dir" 2>/dev/null)"
+    rc=$?
+    [[ $USE_CACHE -eq 0 ]] && rm -rf "$dir"
+    if [[ $rc -ne 0 || -z "$env" ]]; then
+        echo -e "\033[31m[$pkg] Claude Code failed (rc=$rc).\033[0m"; return 1
+    fi
+
+    # Extract the verdict (.result) from the Claude Code wrapper.
+    if command -v jq >/dev/null 2>&1; then
+        result="$(echo "$env" | jq -r '.result // empty')"
+        echo "$result" | jq -r '
+            "  risk: \(.risk // "?")  · confidence: \(.confidence // "?")  · \(.recommendation // "?")",
+            "  \(.summary // "")",
+            (if .suspicious_commit and .suspicious_commit != "null"
+               then "  suspicious commit: \(.suspicious_commit)" else empty end),
+            (.findings[]? | "   - \(.)")
+        ' 2>/dev/null || echo "  $result"
+        local risk; risk="$(echo "$result" | jq -r '.risk // "low"' 2>/dev/null)"
+        case "$risk" in high|critical) RC_GLOBAL=2 ;; esac
+    else
+        echo "$env"  # no jq: raw dump
+    fi
+    echo
+}
+
+RC_GLOBAL=0
+for p in "$@"; do audit_pkg "$p"; done
+exit $RC_GLOBAL
